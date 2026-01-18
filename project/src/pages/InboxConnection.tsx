@@ -18,10 +18,24 @@ export default function InboxConnection() {
   const [connecting, setConnecting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [organizationId, setOrganizationId] = useState<string | null>(null);
+  const [oauthStatus, setOauthStatus] = useState<any>(null);
 
   useEffect(() => {
     loadConnections();
+    checkOAuthStatus();
   }, []);
+
+  async function checkOAuthStatus() {
+    try {
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/health-check`
+      );
+      const data = await response.json();
+      setOauthStatus(data.oauth);
+    } catch (error) {
+      console.error('Error checking OAuth status:', error);
+    }
+  }
 
   async function loadConnections() {
     try {
@@ -151,6 +165,37 @@ export default function InboxConnection() {
           </p>
         </div>
 
+        {oauthStatus && (!oauthStatus.gmail && !oauthStatus.outlook) && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-6 mb-6">
+            <div className="flex items-start gap-4">
+              <AlertCircle className="w-6 h-6 text-amber-600 flex-shrink-0 mt-1" />
+              <div className="flex-1">
+                <h3 className="font-semibold text-amber-900 mb-2">
+                  OAuth Configuration Required
+                </h3>
+                <p className="text-amber-800 text-sm mb-3">
+                  OAuth credentials are not configured. Email connections will not work until you set them up.
+                </p>
+                <div className="text-sm text-amber-900 bg-amber-100 rounded p-4 space-y-2">
+                  <p className="font-semibold">Configuration Status:</p>
+                  <div className="font-mono text-xs space-y-1">
+                    <div>GOOGLE_CLIENT_ID: <span className={oauthStatus.details?.google_client_id === 'set' ? 'text-green-600' : 'text-red-600'}>{oauthStatus.details?.google_client_id}</span></div>
+                    <div>GOOGLE_CLIENT_SECRET: <span className={oauthStatus.details?.google_client_secret === 'set' ? 'text-green-600' : 'text-red-600'}>{oauthStatus.details?.google_client_secret}</span></div>
+                    <div>MICROSOFT_CLIENT_ID: <span className={oauthStatus.details?.microsoft_client_id === 'set' ? 'text-green-600' : 'text-red-600'}>{oauthStatus.details?.microsoft_client_id}</span></div>
+                    <div>MICROSOFT_CLIENT_SECRET: <span className={oauthStatus.details?.microsoft_client_secret === 'set' ? 'text-green-600' : 'text-red-600'}>{oauthStatus.details?.microsoft_client_secret}</span></div>
+                  </div>
+                  <p className="mt-3 pt-3 border-t border-amber-200">
+                    <span className="font-semibold">Next Steps:</span><br />
+                    1. Go to Supabase Dashboard → Project Settings → Edge Functions → Secrets<br />
+                    2. Add the missing secrets listed above<br />
+                    3. Refresh this page to verify the configuration
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-lg p-6 mb-6">
             <div className="flex items-start gap-4">
@@ -162,20 +207,6 @@ export default function InboxConnection() {
                 <p className="text-red-800 text-sm mb-3">
                   {error}
                 </p>
-                {(error.includes('not configured') || error.includes('OAuth')) && (
-                  <div className="text-sm text-red-700 bg-red-100 rounded p-3">
-                    <p className="font-semibold mb-2">OAuth Setup Required</p>
-                    <p className="mb-2">To connect Gmail or Outlook, you need to configure OAuth credentials:</p>
-                    <ol className="list-decimal list-inside space-y-1 ml-2">
-                      <li>Create OAuth credentials in Google Cloud Console or Azure Portal</li>
-                      <li>Set environment variables in your Supabase project</li>
-                      <li>Redeploy the oauth-initiate edge function</li>
-                    </ol>
-                    <p className="mt-3 text-xs">
-                      See docs/EDGE_FUNCTIONS.md for detailed setup instructions.
-                    </p>
-                  </div>
-                )}
                 <button
                   onClick={() => setError(null)}
                   className="mt-3 text-sm text-red-600 hover:text-red-800 font-medium"
@@ -211,9 +242,14 @@ export default function InboxConnection() {
           <div className="grid md:grid-cols-2 gap-6 mb-12">
             <button
               onClick={() => connectInbox('gmail')}
-              disabled={connecting !== null}
-              className="bg-white border-2 border-slate-200 rounded-xl p-8 hover:border-blue-500 hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={connecting !== null || !oauthStatus?.gmail}
+              className="bg-white border-2 border-slate-200 rounded-xl p-8 hover:border-blue-500 hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed relative"
             >
+              {!oauthStatus?.gmail && (
+                <div className="absolute top-2 right-2 bg-amber-100 text-amber-800 text-xs px-2 py-1 rounded">
+                  Not Configured
+                </div>
+              )}
               <Mail className="w-12 h-12 text-red-500 mx-auto mb-4" />
               <h3 className="text-xl font-semibold text-slate-900 mb-2">
                 Connect Gmail
@@ -231,9 +267,14 @@ export default function InboxConnection() {
 
             <button
               onClick={() => connectInbox('outlook')}
-              disabled={connecting !== null}
-              className="bg-white border-2 border-slate-200 rounded-xl p-8 hover:border-blue-500 hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={connecting !== null || !oauthStatus?.outlook}
+              className="bg-white border-2 border-slate-200 rounded-xl p-8 hover:border-blue-500 hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed relative"
             >
+              {!oauthStatus?.outlook && (
+                <div className="absolute top-2 right-2 bg-amber-100 text-amber-800 text-xs px-2 py-1 rounded">
+                  Not Configured
+                </div>
+              )}
               <Mail className="w-12 h-12 text-blue-500 mx-auto mb-4" />
               <h3 className="text-xl font-semibold text-slate-900 mb-2">
                 Connect Outlook
@@ -304,17 +345,27 @@ export default function InboxConnection() {
               <div className="grid md:grid-cols-2 gap-4">
                 <button
                   onClick={() => connectInbox('gmail')}
-                  disabled={connecting !== null}
-                  className="bg-white border border-slate-200 rounded-lg p-6 hover:border-blue-500 hover:shadow transition-all disabled:opacity-50 text-center"
+                  disabled={connecting !== null || !oauthStatus?.gmail}
+                  className="bg-white border border-slate-200 rounded-lg p-6 hover:border-blue-500 hover:shadow transition-all disabled:opacity-50 text-center relative"
                 >
+                  {!oauthStatus?.gmail && (
+                    <div className="absolute top-2 right-2 bg-amber-100 text-amber-800 text-xs px-2 py-1 rounded">
+                      Not Configured
+                    </div>
+                  )}
                   <Mail className="w-8 h-8 text-red-500 mx-auto mb-2" />
                   <span className="font-medium text-slate-900">Add Gmail</span>
                 </button>
                 <button
                   onClick={() => connectInbox('outlook')}
-                  disabled={connecting !== null}
-                  className="bg-white border border-slate-200 rounded-lg p-6 hover:border-blue-500 hover:shadow transition-all disabled:opacity-50 text-center"
+                  disabled={connecting !== null || !oauthStatus?.outlook}
+                  className="bg-white border border-slate-200 rounded-lg p-6 hover:border-blue-500 hover:shadow transition-all disabled:opacity-50 text-center relative"
                 >
+                  {!oauthStatus?.outlook && (
+                    <div className="absolute top-2 right-2 bg-amber-100 text-amber-800 text-xs px-2 py-1 rounded">
+                      Not Configured
+                    </div>
+                  )}
                   <Mail className="w-8 h-8 text-blue-500 mx-auto mb-2" />
                   <span className="font-medium text-slate-900">Add Outlook</span>
                 </button>
