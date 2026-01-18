@@ -44,7 +44,7 @@ export default function InboxConnection() {
       }, 1000);
       return () => clearTimeout(timer);
     } else if (redirectCountdown === 0) {
-      navigate('/dashboard');
+      navigate('/app');
     }
   }, [redirectCountdown]);
 
@@ -254,7 +254,7 @@ export default function InboxConnection() {
                   Your email history has been scanned. Redirecting to dashboard in {redirectCountdown} seconds...
                 </p>
                 <button
-                  onClick={() => navigate('/dashboard')}
+                  onClick={() => navigate('/app')}
                   className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium"
                 >
                   View Dashboard Now
