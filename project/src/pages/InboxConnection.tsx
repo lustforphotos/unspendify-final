@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Mail, CheckCircle, AlertCircle, Loader, Shield } from 'lucide-react';
+import { Mail, CheckCircle, AlertCircle, Loader, Shield, ArrowRight } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { navigate } from '../utils/router';
 
 interface EmailConnection {
   id: string;
@@ -19,11 +20,45 @@ export default function InboxConnection() {
   const [error, setError] = useState<string | null>(null);
   const [organizationId, setOrganizationId] = useState<string | null>(null);
   const [oauthStatus, setOauthStatus] = useState<any>(null);
+  const [scanCompleted, setScanCompleted] = useState(false);
+  const [redirectCountdown, setRedirectCountdown] = useState<number | null>(null);
 
   useEffect(() => {
     loadConnections();
     checkOAuthStatus();
   }, []);
+
+  useEffect(() => {
+    if (connections.length > 0 && connections.some(c => c.last_backfill_at)) {
+      if (!scanCompleted) {
+        setScanCompleted(true);
+        setRedirectCountdown(5);
+      }
+    }
+  }, [connections, scanCompleted]);
+
+  useEffect(() => {
+    if (redirectCountdown !== null && redirectCountdown > 0) {
+      const timer = setTimeout(() => {
+        setRedirectCountdown(redirectCountdown - 1);
+      }, 1000);
+      return () => clearTimeout(timer);
+    } else if (redirectCountdown === 0) {
+      navigate('/dashboard');
+    }
+  }, [redirectCountdown]);
+
+  useEffect(() => {
+    if (connections.length > 0 && !scanCompleted) {
+      const hasIncompleteScans = connections.some(c => c.is_active && !c.last_backfill_at);
+      if (hasIncompleteScans) {
+        const pollInterval = setInterval(() => {
+          loadConnections();
+        }, 3000);
+        return () => clearInterval(pollInterval);
+      }
+    }
+  }, [connections, scanCompleted]);
 
   async function checkOAuthStatus() {
     try {
@@ -93,12 +128,23 @@ export default function InboxConnection() {
         }
       );
 
+      console.log('OAuth response status:', response.status);
+
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to initiate OAuth');
+        const errorData = await response.json().catch(() => ({ error: 'Failed to parse error response' }));
+        console.error('OAuth initiate error:', errorData);
+        const errorMsg = errorData.error || errorData.message || 'Failed to initiate OAuth';
+        throw new Error(errorMsg);
       }
 
-      const { authUrl } = await response.json();
+      const responseData = await response.json();
+      console.log('OAuth response data:', responseData);
+
+      const { authUrl } = responseData;
+
+      if (!authUrl) {
+        throw new Error('No auth URL returned from server');
+      }
 
       const width = 600;
       const height = 700;
@@ -191,6 +237,29 @@ export default function InboxConnection() {
                     3. Refresh this page to verify the configuration
                   </p>
                 </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {scanCompleted && redirectCountdown !== null && (
+          <div className="bg-green-50 border border-green-200 rounded-lg p-6 mb-6">
+            <div className="flex items-start gap-4">
+              <CheckCircle className="w-6 h-6 text-green-600 flex-shrink-0 mt-1" />
+              <div className="flex-1">
+                <h3 className="font-semibold text-green-900 mb-2">
+                  Historical Scan Complete!
+                </h3>
+                <p className="text-green-800 text-sm mb-4">
+                  Your email history has been scanned. Redirecting to dashboard in {redirectCountdown} seconds...
+                </p>
+                <button
+                  onClick={() => navigate('/dashboard')}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium"
+                >
+                  View Dashboard Now
+                  <ArrowRight className="w-4 h-4" />
+                </button>
               </div>
             </div>
           </div>
