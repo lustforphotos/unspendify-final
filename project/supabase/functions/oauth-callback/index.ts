@@ -32,8 +32,8 @@ Deno.serve(async (req: Request) => {
     let emailAddress: string;
 
     if (provider === 'gmail') {
-      const clientId = Deno.env.get('GOOGLE_CLIENT_ID')!;
-      const clientSecret = Deno.env.get('GOOGLE_CLIENT_SECRET')!;
+      const clientId = Deno.env.get('google_client_id')!;
+      const clientSecret = Deno.env.get('google_client_secret')!;
       const callbackUrl = `${supabaseUrl}/functions/v1/oauth-callback`;
 
       const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
@@ -60,8 +60,8 @@ Deno.serve(async (req: Request) => {
       const profile = await profileRes.json();
       emailAddress = profile.email;
     } else if (provider === 'outlook') {
-      const clientId = Deno.env.get('MICROSOFT_CLIENT_ID')!;
-      const clientSecret = Deno.env.get('MICROSOFT_CLIENT_SECRET')!;
+      const clientId = Deno.env.get('microsoft_client_id')!;
+      const clientSecret = Deno.env.get('microsoft_client_secret')!;
       const callbackUrl = `${supabaseUrl}/functions/v1/oauth-callback`;
 
       const tokenRes = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
@@ -100,8 +100,8 @@ Deno.serve(async (req: Request) => {
         organization_id: organizationId,
         provider,
         email_address: emailAddress,
-        access_token_encrypted: tokenResponse.access_token,
-        refresh_token_encrypted: tokenResponse.refresh_token || '',
+        access_token: tokenResponse.access_token,
+        refresh_token: tokenResponse.refresh_token || '',
         token_expires_at: expiresAt.toISOString(),
         is_active: true,
       }, {
@@ -124,9 +124,27 @@ Deno.serve(async (req: Request) => {
       .single();
 
     if (connection) {
-      await supabase.functions.invoke('scan-emails', {
-        body: { connectionId: connection.id, scanType: 'backfill' },
+      console.log('Starting backfill scan for connection:', connection.id);
+
+      // Trigger the scan using a direct fetch call instead of supabase.functions.invoke
+      const scanUrl = `${supabaseUrl}/functions/v1/scan-emails`;
+      const scanResponse = await fetch(scanUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${supabaseKey}`,
+        },
+        body: JSON.stringify({
+          connectionId: connection.id,
+          scanType: 'backfill',
+        }),
       });
+
+      if (!scanResponse.ok) {
+        console.error('Failed to start scan:', await scanResponse.text());
+      } else {
+        console.log('Backfill scan started successfully');
+      }
     }
 
     return new Response(
