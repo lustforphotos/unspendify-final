@@ -35,6 +35,11 @@ Deno.serve(async (req: Request) => {
     overallStatus = 'degraded';
   }
 
+  // Check OAuth configuration
+  const oauthConfig = checkOAuthConfig();
+  checks.oauth_gmail = oauthConfig.gmail ? 'ok' : 'not_configured';
+  checks.oauth_outlook = oauthConfig.outlook ? 'ok' : 'not_configured';
+
   const statusCode = overallStatus === 'healthy' ? 200 : overallStatus === 'degraded' ? 200 : 503;
 
   return new Response(
@@ -42,6 +47,7 @@ Deno.serve(async (req: Request) => {
       status: overallStatus,
       timestamp: new Date().toISOString(),
       checks,
+      oauth: oauthConfig,
       version: '1.0.0',
     }),
     {
@@ -95,4 +101,22 @@ async function checkEmailService(): Promise<boolean> {
     console.error('Email service health check failed:', error);
     return false;
   }
+}
+
+function checkOAuthConfig() {
+  const googleClientId = Deno.env.get('GOOGLE_CLIENT_ID');
+  const googleClientSecret = Deno.env.get('GOOGLE_CLIENT_SECRET');
+  const microsoftClientId = Deno.env.get('MICROSOFT_CLIENT_ID');
+  const microsoftClientSecret = Deno.env.get('MICROSOFT_CLIENT_SECRET');
+
+  return {
+    gmail: !!(googleClientId && googleClientSecret),
+    outlook: !!(microsoftClientId && microsoftClientSecret),
+    details: {
+      google_client_id: googleClientId ? 'set' : 'missing',
+      google_client_secret: googleClientSecret ? 'set' : 'missing',
+      microsoft_client_id: microsoftClientId ? 'set' : 'missing',
+      microsoft_client_secret: microsoftClientSecret ? 'set' : 'missing',
+    },
+  };
 }
