@@ -1,6 +1,7 @@
 [build]
   command = "npm run build"
   publish = "dist"
+  base = "project"
 
 
 [build.environment]
@@ -10,6 +11,7 @@
   from = "/*"
   to = "/index.html"
   status = 200
+
 
 
 
