@@ -498,10 +498,24 @@ async function upsertTools(
         .select();
 
       if (insertError) {
-        console.error('Error inserting tool:', insertError);
+        console.error('Error inserting tool:', JSON.stringify(insertError));
       } else {
-        console.log('Successfully created tool:', inserted);
+        console.log('Successfully created tool:', JSON.stringify(inserted));
         toolsCreated++;
+
+        const { data: verifyInsert, error: verifyError } = await supabase
+          .from('detected_tools')
+          .select('id')
+          .eq('id', inserted[0].id)
+          .maybeSingle();
+
+        if (verifyError) {
+          console.error('Error verifying insert:', JSON.stringify(verifyError));
+        } else if (!verifyInsert) {
+          console.error('CRITICAL: Tool was inserted but cannot be found:', inserted[0].id);
+        } else {
+          console.log('Verified tool exists in database:', verifyInsert.id);
+        }
       }
     }
   }
