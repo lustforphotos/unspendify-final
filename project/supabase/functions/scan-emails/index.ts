@@ -397,35 +397,82 @@ async function parseEmailsForTools(
   ];
 
   const subscriptionKeywords = /\b(subscription|invoice|receipt|payment|renewal|trial|billing|charge|plan|upgrade|downgrade)\b/i;
-  const amountPattern = /\$([0-9,]+\.?[0-9]*)/;
+  const amountPattern = /\$([0-9,]+\.?[0-9]*)/g;
   const frequencyPattern = /\b(monthly|annual|yearly|quarterly|weekly)\b/i;
 
   for (const email of emails) {
     const fullText = `${email.subject} ${email.body}`.toLowerCase();
-    
+
     if (!subscriptionKeywords.test(fullText)) {
       continue;
     }
 
-    for (const vendor of vendorPatterns) {
-      if (vendor.pattern.test(fullText)) {
-        const amountMatch = fullText.match(amountPattern);
-        const frequencyMatch = fullText.match(frequencyPattern);
-        
-        let confidence = 60;
-        if (amountMatch) confidence += 20;
-        if (frequencyMatch) confidence += 10;
-        if (email.subject.toLowerCase().includes('invoice')) confidence += 10;
+    // Check sender domain to prioritize vendor detection
+    const senderDomain = email.sender.toLowerCase();
 
-        tools.push({
-          vendorName: vendor.name,
-          normalizedVendor: vendor.name.toLowerCase().replace(/\s+/g, '_'),
-          amount: amountMatch ? parseFloat(amountMatch[1].replace(/,/g, '')) : undefined,
-          date: email.date,
-          billingFrequency: frequencyMatch ? frequencyMatch[1].toLowerCase() : 'unknown',
-          confidence,
-        });
+    for (const vendor of vendorPatterns) {
+      // Check if vendor name appears in sender (highest confidence)
+      const inSender = vendor.pattern.test(senderDomain);
+
+      // Check if vendor name appears in subject
+      const inSubject = vendor.pattern.test(email.subject.toLowerCase());
+
+      // Only proceed if vendor is in sender or subject (not just body)
+      if (!inSender && !inSubject) {
+        continue;
       }
+
+      // Look for contextual clues that this is actually about this vendor's charge
+      const vendorContext = new RegExp(
+        `(${vendor.name}|${vendor.pattern.source}).{0,200}(charge|invoice|payment|bill|subscription|renewal)`,
+        'i'
+      );
+
+      // Or payment context near vendor name
+      const paymentContext = new RegExp(
+        `(charge|invoice|payment|bill|subscription|renewal).{0,200}(${vendor.name}|${vendor.pattern.source})`,
+        'i'
+      );
+
+      const hasContext = vendorContext.test(fullText) || paymentContext.test(fullText);
+
+      // Require context match unless vendor is in sender
+      if (!inSender && !hasContext) {
+        continue;
+      }
+
+      const amountMatches = Array.from(fullText.matchAll(amountPattern));
+      const frequencyMatch = fullText.match(frequencyPattern);
+
+      // Calculate confidence based on signals
+      let confidence = 50;
+      if (inSender) confidence += 30;
+      if (inSubject) confidence += 20;
+      if (hasContext) confidence += 10;
+      if (amountMatches.length > 0) confidence += 15;
+      if (frequencyMatch) confidence += 10;
+      if (email.subject.toLowerCase().includes('invoice')) confidence += 10;
+
+      // Only create detection if confidence is high enough
+      if (confidence < 70) {
+        continue;
+      }
+
+      // Find the most likely amount (prefer larger amounts as they're more likely to be the actual charge)
+      let amount: number | undefined;
+      if (amountMatches.length > 0) {
+        const amounts = amountMatches.map(m => parseFloat(m[1].replace(/,/g, '')));
+        amount = Math.max(...amounts);
+      }
+
+      tools.push({
+        vendorName: vendor.name,
+        normalizedVendor: vendor.name.toLowerCase().replace(/\s+/g, '_'),
+        amount,
+        date: email.date,
+        billingFrequency: frequencyMatch ? frequencyMatch[1].toLowerCase() : 'unknown',
+        confidence,
+      });
     }
   }
 
