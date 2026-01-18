@@ -79,7 +79,7 @@ Deno.serve(async (req: Request) => {
         .single();
 
       try {
-        const emails = await fetchEmails(connection, scanType);
+        const emails = await fetchEmails(connection, scanType, supabase);
         const detectedTools = await parseEmailsForTools(emails, connection);
         
         const { toolsCreated, toolsUpdated } = await upsertTools(
@@ -149,23 +149,116 @@ Deno.serve(async (req: Request) => {
 
 async function fetchEmails(
   connection: any,
-  scanType: string
+  scanType: string,
+  supabase: any
 ): Promise<EmailMessage[]> {
   const monthsBack = scanType === 'backfill' ? (connection.backfill_months || 12) : 0;
   const since = new Date();
   since.setMonth(since.getMonth() - (monthsBack || 0));
-  
+
   if (scanType === 'daily' && connection.last_scan_at) {
     since.setTime(new Date(connection.last_scan_at).getTime());
   }
 
-  if (connection.provider === 'gmail') {
-    return await fetchGmailMessages(connection, since);
-  } else if (connection.provider === 'outlook') {
-    return await fetchOutlookMessages(connection, since);
+  // Check if token is expired and refresh if needed
+  const refreshedConnection = await refreshTokenIfNeeded(connection, supabase);
+
+  if (refreshedConnection.provider === 'gmail') {
+    return await fetchGmailMessages(refreshedConnection, since);
+  } else if (refreshedConnection.provider === 'outlook') {
+    return await fetchOutlookMessages(refreshedConnection, since);
   }
-  
+
   return [];
+}
+
+async function refreshTokenIfNeeded(connection: any, supabase: any): Promise<any> {
+  const expiresAt = new Date(connection.token_expires_at);
+  const now = new Date();
+  const fiveMinutesFromNow = new Date(now.getTime() + 5 * 60 * 1000);
+
+  // If token expires in less than 5 minutes, refresh it
+  if (expiresAt <= fiveMinutesFromNow) {
+    console.log(`Token expiring soon for connection ${connection.id}, refreshing...`);
+
+    try {
+      let tokenResponse: any;
+
+      if (connection.provider === 'gmail') {
+        const clientId = Deno.env.get('google_client_id')!;
+        const clientSecret = Deno.env.get('google_client_secret')!;
+
+        const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            client_id: clientId,
+            client_secret: clientSecret,
+            refresh_token: connection.refresh_token,
+            grant_type: 'refresh_token',
+          }),
+        });
+
+        if (!tokenRes.ok) {
+          const errorBody = await tokenRes.text();
+          throw new Error(`Failed to refresh Gmail token: ${tokenRes.status} - ${errorBody}`);
+        }
+
+        tokenResponse = await tokenRes.json();
+      } else if (connection.provider === 'outlook') {
+        const clientId = Deno.env.get('microsoft_client_id')!;
+        const clientSecret = Deno.env.get('microsoft_client_secret')!;
+
+        const tokenRes = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            client_id: clientId,
+            client_secret: clientSecret,
+            refresh_token: connection.refresh_token,
+            grant_type: 'refresh_token',
+          }),
+        });
+
+        if (!tokenRes.ok) {
+          const errorBody = await tokenRes.text();
+          throw new Error(`Failed to refresh Outlook token: ${tokenRes.status} - ${errorBody}`);
+        }
+
+        tokenResponse = await tokenRes.json();
+      }
+
+      if (tokenResponse && tokenResponse.access_token) {
+        const newExpiresAt = new Date(Date.now() + (tokenResponse.expires_in * 1000));
+
+        // Update the connection in the database
+        await supabase
+          .from('email_connections')
+          .update({
+            access_token: tokenResponse.access_token,
+            token_expires_at: newExpiresAt.toISOString(),
+            // Some providers return a new refresh token, update it if present
+            ...(tokenResponse.refresh_token && { refresh_token: tokenResponse.refresh_token }),
+          })
+          .eq('id', connection.id);
+
+        console.log(`Token refreshed successfully for connection ${connection.id}`);
+
+        // Return updated connection
+        return {
+          ...connection,
+          access_token: tokenResponse.access_token,
+          token_expires_at: newExpiresAt.toISOString(),
+          ...(tokenResponse.refresh_token && { refresh_token: tokenResponse.refresh_token }),
+        };
+      }
+    } catch (error) {
+      console.error(`Failed to refresh token for connection ${connection.id}:`, error);
+      throw new Error(`Token refresh failed: ${error.message}. Please reconnect your inbox.`);
+    }
+  }
+
+  return connection;
 }
 
 async function fetchGmailMessages(
@@ -178,13 +271,17 @@ async function fetchGmailMessages(
   ].join(' ');
 
   const searchUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=500`;
-  
+
+  console.log('Fetching Gmail messages with query:', query);
+
   const searchRes = await fetch(searchUrl, {
-    headers: { Authorization: `Bearer ${connection.access_token_encrypted}` },
+    headers: { Authorization: `Bearer ${connection.access_token}` },
   });
 
   if (!searchRes.ok) {
-    throw new Error(`Gmail API error: ${searchRes.statusText}`);
+    const errorBody = await searchRes.text();
+    console.error('Gmail API error:', searchRes.status, searchRes.statusText, errorBody);
+    throw new Error(`Gmail API error: ${searchRes.status} ${searchRes.statusText} - ${errorBody}`);
   }
 
   const searchData = await searchRes.json();
@@ -197,7 +294,7 @@ async function fetchGmailMessages(
   for (const msg of searchData.messages.slice(0, 100)) {
     const msgUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?format=full`;
     const msgRes = await fetch(msgUrl, {
-      headers: { Authorization: `Bearer ${connection.access_token_encrypted}` },
+      headers: { Authorization: `Bearer ${connection.access_token}` },
     });
 
     if (msgRes.ok) {
@@ -242,7 +339,7 @@ async function fetchOutlookMessages(
   const url = `https://graph.microsoft.com/v1.0/me/messages?$filter=${encodeURIComponent(filter)}&$search="${encodeURIComponent(search)}"&$top=100&$select=id,from,subject,bodyPreview,receivedDateTime,toRecipients,ccRecipients`;
 
   const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${connection.access_token_encrypted}` },
+    headers: { Authorization: `Bearer ${connection.access_token}` },
   });
 
   if (!res.ok) {
@@ -343,16 +440,26 @@ async function upsertTools(
   let toolsCreated = 0;
   let toolsUpdated = 0;
 
+  console.log(`Upserting ${detectedTools.length} tools for organization ${connection.organization_id}`);
+
   for (const tool of detectedTools) {
-    const { data: existing } = await supabase
+    console.log('Processing tool:', tool.vendorName, tool.normalizedVendor);
+
+    const { data: existing, error: selectError } = await supabase
       .from('detected_tools')
       .select('*')
       .eq('organization_id', connection.organization_id)
       .eq('normalized_vendor', tool.normalizedVendor)
       .maybeSingle();
 
+    if (selectError) {
+      console.error('Error checking existing tool:', selectError);
+      continue;
+    }
+
     if (existing) {
-      await supabase
+      console.log('Updating existing tool:', existing.id);
+      const { error: updateError } = await supabase
         .from('detected_tools')
         .update({
           last_charge_amount: tool.amount,
@@ -362,11 +469,17 @@ async function upsertTools(
           updated_at: new Date().toISOString(),
         })
         .eq('id', existing.id);
-      toolsUpdated++;
+
+      if (updateError) {
+        console.error('Error updating tool:', updateError);
+      } else {
+        toolsUpdated++;
+      }
     } else {
       const estimatedRenewal = tool.date ? calculateRenewalDate(tool.date, tool.billingFrequency || 'monthly') : null;
-      
-      await supabase
+
+      console.log('Creating new tool:', tool.vendorName);
+      const { data: inserted, error: insertError } = await supabase
         .from('detected_tools')
         .insert({
           organization_id: connection.organization_id,
@@ -381,11 +494,19 @@ async function upsertTools(
           confidence_score: tool.confidence,
           inferred_owner_id: connection.user_id,
           status: 'active',
-        });
-      toolsCreated++;
+        })
+        .select();
+
+      if (insertError) {
+        console.error('Error inserting tool:', insertError);
+      } else {
+        console.log('Successfully created tool:', inserted);
+        toolsCreated++;
+      }
     }
   }
 
+  console.log(`Upsert complete: ${toolsCreated} created, ${toolsUpdated} updated`);
   return { toolsCreated, toolsUpdated };
 }
 
