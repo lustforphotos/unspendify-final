@@ -114,7 +114,7 @@ function generateRenewalEmail(
             <div class="amount">$${amount}</div>
             <div class="date">Renews on ${renewalDate}</div>
             <p>Your subscription will automatically renew soon. Review your subscription in the dashboard.</p>
-            <a href="${appUrl}/dashboard" class="cta">View Dashboard</a>
+            <a href="${appUrl}/app" class="cta">View Dashboard</a>
           </div>
         </div>
       </body>
@@ -162,7 +162,7 @@ function generateTrialEmail(
             <div class="tool-name">${tool.vendor_name}</div>
             <div class="warning">Your trial period is ending soon and will convert to a paid subscription.</div>
             <p>Take action now if you want to cancel or modify your subscription.</p>
-            <a href="${appUrl}/dashboard" class="cta">Manage Subscription</a>
+            <a href="${appUrl}/app" class="cta">Manage Subscription</a>
           </div>
         </div>
       </body>
