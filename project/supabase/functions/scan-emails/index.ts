@@ -6,9 +6,15 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info, Apikey',
 };
 
+const DAILY_LIMITS = {
+  MAX_EMAILS: 300,
+  MAX_CLASSIFICATIONS: 300,
+  MAX_EXTRACTIONS: 30,
+};
+
 interface ScanRequest {
   connectionId?: string;
-  scanType?: 'backfill' | 'daily' | 'scheduled';
+  scanType?: 'backfill' | 'daily' | 'manual';
 }
 
 interface EmailMessage {
@@ -20,13 +26,22 @@ interface EmailMessage {
   recipients: string[];
 }
 
-interface DetectedTool {
-  vendorName: string;
-  normalizedVendor: string;
-  amount?: number;
-  date?: string;
-  billingFrequency?: string;
+interface ClassificationResult {
+  is_tool_related: boolean;
   confidence: number;
+  reason: string;
+}
+
+interface ExtractionResult {
+  vendor_name: string | null;
+  amount: number | null;
+  currency: string | null;
+  billing_cycle: 'monthly' | 'yearly' | 'trial' | null;
+  renewal_date: string | null;
+  is_trial: boolean;
+  is_cancellation: boolean;
+  confidence: number;
+  reason: string;
 }
 
 Deno.serve(async (req: Request) => {
@@ -48,7 +63,7 @@ Deno.serve(async (req: Request) => {
         .select('*')
         .eq('id', connectionId)
         .eq('is_active', true)
-        .single();
+        .maybeSingle();
       connections = data ? [data] : [];
     } else {
       const { data } = await supabase
@@ -68,6 +83,18 @@ Deno.serve(async (req: Request) => {
     const results = [];
 
     for (const connection of connections) {
+      const limitsCheck = await checkDailyLimits(supabase, connection.user_id);
+
+      if (!limitsCheck.can_proceed) {
+        console.log(`User ${connection.user_id} hit daily limit: ${limitsCheck.limit_hit}`);
+        results.push({
+          connectionId: connection.id,
+          skipped: true,
+          reason: `Daily limit reached: ${limitsCheck.limit_hit}`,
+        });
+        continue;
+      }
+
       const scanLog = await supabase
         .from('email_scan_logs')
         .insert({
@@ -80,20 +107,27 @@ Deno.serve(async (req: Request) => {
 
       try {
         const emails = await fetchEmails(connection, scanType, supabase);
-        const detectedTools = await parseEmailsForTools(emails, connection);
-        
-        const { toolsCreated, toolsUpdated } = await upsertTools(
+
+        const emailsToScan = emails.slice(0, limitsCheck.emails_remaining);
+
+        const { toolsCreated, toolsUpdated } = await processEmailsWithAI(
           supabase,
-          detectedTools,
-          connection
+          emailsToScan,
+          connection,
+          limitsCheck
         );
 
         await generateInterruptions(supabase, connection.organization_id);
+
+        const latestEmailDate = emails.length > 0
+          ? new Date(Math.max(...emails.map(e => new Date(e.date).getTime()))).toISOString()
+          : null;
 
         await supabase
           .from('email_connections')
           .update({
             last_scan_at: new Date().toISOString(),
+            ...(latestEmailDate && { last_scanned_email_date: latestEmailDate }),
             ...(scanType === 'backfill' && { last_backfill_at: new Date().toISOString() }),
           })
           .eq('id', connection.id);
@@ -101,7 +135,7 @@ Deno.serve(async (req: Request) => {
         await supabase
           .from('email_scan_logs')
           .update({
-            emails_scanned: emails.length,
+            emails_scanned: emailsToScan.length,
             tools_detected: toolsCreated,
             tools_updated: toolsUpdated,
             completed_at: new Date().toISOString(),
@@ -111,13 +145,13 @@ Deno.serve(async (req: Request) => {
 
         results.push({
           connectionId: connection.id,
-          emailsScanned: emails.length,
+          emailsScanned: emailsToScan.length,
           toolsDetected: toolsCreated,
           toolsUpdated,
         });
       } catch (error) {
         console.error(`Scan failed for connection ${connection.id}:`, error);
-        
+
         await supabase
           .from('email_scan_logs')
           .update({
@@ -147,20 +181,38 @@ Deno.serve(async (req: Request) => {
   }
 });
 
+async function checkDailyLimits(supabase: any, userId: string): Promise<any> {
+  const { data, error } = await supabase.rpc('check_scan_limits', {
+    p_user_id: userId,
+    p_emails_needed: 1,
+    p_classifications_needed: 1,
+    p_extractions_needed: 0,
+  });
+
+  if (error) {
+    console.error('Error checking limits:', error);
+    return { can_proceed: true, emails_remaining: DAILY_LIMITS.MAX_EMAILS };
+  }
+
+  return data;
+}
+
 async function fetchEmails(
   connection: any,
   scanType: string,
   supabase: any
 ): Promise<EmailMessage[]> {
-  const monthsBack = scanType === 'backfill' ? (connection.backfill_months || 12) : 0;
-  const since = new Date();
-  since.setMonth(since.getMonth() - (monthsBack || 0));
+  let since = new Date();
 
-  if (scanType === 'daily' && connection.last_scan_at) {
-    since.setTime(new Date(connection.last_scan_at).getTime());
+  if (scanType === 'backfill') {
+    const monthsBack = connection.backfill_months || 12;
+    since.setMonth(since.getMonth() - monthsBack);
+  } else if (scanType === 'daily' && connection.last_scanned_email_date) {
+    since = new Date(connection.last_scanned_email_date);
+  } else if (scanType === 'daily') {
+    since.setDate(since.getDate() - 1);
   }
 
-  // Check if token is expired and refresh if needed
   const refreshedConnection = await refreshTokenIfNeeded(connection, supabase);
 
   if (refreshedConnection.provider === 'gmail') {
@@ -177,7 +229,6 @@ async function refreshTokenIfNeeded(connection: any, supabase: any): Promise<any
   const now = new Date();
   const fiveMinutesFromNow = new Date(now.getTime() + 5 * 60 * 1000);
 
-  // If token expires in less than 5 minutes, refresh it
   if (expiresAt <= fiveMinutesFromNow) {
     console.log(`Token expiring soon for connection ${connection.id}, refreshing...`);
 
@@ -231,20 +282,17 @@ async function refreshTokenIfNeeded(connection: any, supabase: any): Promise<any
       if (tokenResponse && tokenResponse.access_token) {
         const newExpiresAt = new Date(Date.now() + (tokenResponse.expires_in * 1000));
 
-        // Update the connection in the database
         await supabase
           .from('email_connections')
           .update({
             access_token: tokenResponse.access_token,
             token_expires_at: newExpiresAt.toISOString(),
-            // Some providers return a new refresh token, update it if present
             ...(tokenResponse.refresh_token && { refresh_token: tokenResponse.refresh_token }),
           })
           .eq('id', connection.id);
 
         console.log(`Token refreshed successfully for connection ${connection.id}`);
 
-        // Return updated connection
         return {
           ...connection,
           access_token: tokenResponse.access_token,
@@ -266,13 +314,11 @@ async function fetchGmailMessages(
   since: Date
 ): Promise<EmailMessage[]> {
   const query = [
-    'invoice OR receipt OR subscription OR payment OR renewal OR trial',
+    'invoice OR receipt OR subscription OR payment OR renewal OR trial OR bill OR charge',
     `after:${Math.floor(since.getTime() / 1000)}`,
   ].join(' ');
 
-  const searchUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=500`;
-
-  console.log('Fetching Gmail messages with query:', query);
+  const searchUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=300`;
 
   const searchRes = await fetch(searchUrl, {
     headers: { Authorization: `Bearer ${connection.access_token}` },
@@ -281,7 +327,7 @@ async function fetchGmailMessages(
   if (!searchRes.ok) {
     const errorBody = await searchRes.text();
     console.error('Gmail API error:', searchRes.status, searchRes.statusText, errorBody);
-    throw new Error(`Gmail API error: ${searchRes.status} ${searchRes.statusText} - ${errorBody}`);
+    throw new Error(`Gmail API error: ${searchRes.status} ${searchRes.statusText}`);
   }
 
   const searchData = await searchRes.json();
@@ -291,7 +337,7 @@ async function fetchGmailMessages(
     return messages;
   }
 
-  for (const msg of searchData.messages.slice(0, 100)) {
+  for (const msg of searchData.messages.slice(0, 300)) {
     const msgUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?format=full`;
     const msgRes = await fetch(msgUrl, {
       headers: { Authorization: `Bearer ${connection.access_token}` },
@@ -300,7 +346,7 @@ async function fetchGmailMessages(
     if (msgRes.ok) {
       const msgData = await msgRes.json();
       const headers = msgData.payload.headers;
-      
+
       const getHeader = (name: string) => {
         const header = headers.find((h: any) => h.name.toLowerCase() === name.toLowerCase());
         return header?.value || '';
@@ -320,7 +366,7 @@ async function fetchGmailMessages(
         id: msg.id,
         sender: getHeader('from'),
         subject: getHeader('subject'),
-        body: body.substring(0, 5000),
+        body: body.substring(0, 3000),
         date: new Date(parseInt(msgData.internalDate)).toISOString(),
         recipients: [getHeader('to'), getHeader('cc')].filter(Boolean),
       });
@@ -335,8 +381,8 @@ async function fetchOutlookMessages(
   since: Date
 ): Promise<EmailMessage[]> {
   const filter = `receivedDateTime ge ${since.toISOString()}`;
-  const search = 'invoice OR receipt OR subscription OR payment OR renewal OR trial';
-  const url = `https://graph.microsoft.com/v1.0/me/messages?$filter=${encodeURIComponent(filter)}&$search="${encodeURIComponent(search)}"&$top=100&$select=id,from,subject,bodyPreview,receivedDateTime,toRecipients,ccRecipients`;
+  const search = 'invoice OR receipt OR subscription OR payment OR renewal OR trial OR bill OR charge';
+  const url = `https://graph.microsoft.com/v1.0/me/messages?$filter=${encodeURIComponent(filter)}&$search="${encodeURIComponent(search)}"&$top=300&$select=id,from,subject,bodyPreview,receivedDateTime,toRecipients,ccRecipients`;
 
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${connection.access_token}` },
@@ -355,7 +401,7 @@ async function fetchOutlookMessages(
         id: msg.id,
         sender: msg.from?.emailAddress?.address || '',
         subject: msg.subject || '',
-        body: msg.bodyPreview || '',
+        body: (msg.bodyPreview || '').substring(0, 3000),
         date: msg.receivedDateTime,
         recipients: [
           ...(msg.toRecipients || []).map((r: any) => r.emailAddress?.address),
@@ -368,226 +414,325 @@ async function fetchOutlookMessages(
   return messages;
 }
 
-async function parseEmailsForTools(
+async function processEmailsWithAI(
+  supabase: any,
   emails: EmailMessage[],
-  connection: any
-): Promise<DetectedTool[]> {
-  const tools: DetectedTool[] = [];
-  const vendorPatterns = [
-    { pattern: /stripe/i, name: 'Stripe', isParent: true },
-    { pattern: /hubspot/i, name: 'HubSpot' },
-    { pattern: /salesforce/i, name: 'Salesforce' },
-    { pattern: /slack/i, name: 'Slack' },
-    { pattern: /zoom/i, name: 'Zoom' },
-    { pattern: /google workspace|g suite/i, name: 'Google Workspace', isParent: true },
-    { pattern: /microsoft 365|office 365/i, name: 'Microsoft 365', isParent: true },
-    { pattern: /adobe/i, name: 'Adobe', isParent: true },
-    { pattern: /aws|amazon web services/i, name: 'AWS', isParent: true },
-    { pattern: /mailchimp/i, name: 'Mailchimp' },
-    { pattern: /typeform/i, name: 'Typeform' },
-    { pattern: /notion/i, name: 'Notion' },
-    { pattern: /figma/i, name: 'Figma' },
-    { pattern: /canva/i, name: 'Canva' },
-    { pattern: /asana/i, name: 'Asana' },
-    { pattern: /trello/i, name: 'Trello' },
-    { pattern: /dropbox/i, name: 'Dropbox' },
-    { pattern: /airtable/i, name: 'Airtable' },
-    { pattern: /zapier/i, name: 'Zapier' },
-    { pattern: /loom/i, name: 'Loom' },
-  ];
-
-  const subscriptionKeywords = /\b(subscription|invoice|receipt|payment|renewal|trial|billing|charge|plan|upgrade|downgrade)\b/i;
-  const amountPattern = /\$([0-9,]+\.?[0-9]*)/g;
-  const frequencyPattern = /\b(monthly|annual|yearly|quarterly|weekly)\b/i;
+  connection: any,
+  limitsCheck: any
+): Promise<{ toolsCreated: number; toolsUpdated: number }> {
+  let toolsCreated = 0;
+  let toolsUpdated = 0;
+  let classificationsUsed = 0;
+  let extractionsUsed = 0;
 
   for (const email of emails) {
-    const fullText = `${email.subject} ${email.body}`.toLowerCase();
-
-    if (!subscriptionKeywords.test(fullText)) {
-      continue;
+    if (classificationsUsed >= limitsCheck.classifications_remaining) {
+      console.log('Classification limit reached, stopping scan');
+      break;
     }
 
-    // Check sender domain to prioritize vendor detection
-    const senderDomain = email.sender.toLowerCase();
+    try {
+      const classification = await classifyEmail(email);
+      classificationsUsed++;
 
-    for (const vendor of vendorPatterns) {
-      // Check if vendor name appears in sender (highest confidence)
-      const inSender = vendor.pattern.test(senderDomain);
+      await supabase.from('ai_extraction_logs').insert({
+        user_id: connection.user_id,
+        email_id: email.id,
+        email_subject: email.subject,
+        classification_confidence: classification.confidence,
+        extraction_attempted: false,
+      });
 
-      // Check if vendor name appears in subject
-      const inSubject = vendor.pattern.test(email.subject.toLowerCase());
-
-      // Only proceed if vendor is in sender or subject (not just body)
-      if (!inSender && !inSubject) {
+      if (!classification.is_tool_related || classification.confidence < 40) {
         continue;
       }
 
-      // Look for contextual clues that this is actually about this vendor's charge
-      const vendorContext = new RegExp(
-        `(${vendor.name}|${vendor.pattern.source}).{0,200}(charge|invoice|payment|bill|subscription|renewal)`,
-        'i'
-      );
-
-      // Or payment context near vendor name
-      const paymentContext = new RegExp(
-        `(charge|invoice|payment|bill|subscription|renewal).{0,200}(${vendor.name}|${vendor.pattern.source})`,
-        'i'
-      );
-
-      const hasContext = vendorContext.test(fullText) || paymentContext.test(fullText);
-
-      // Require context match unless vendor is in sender
-      if (!inSender && !hasContext) {
+      if (extractionsUsed >= limitsCheck.extractions_remaining) {
+        console.log('Extraction limit reached, stopping extraction');
         continue;
       }
 
-      const amountMatches = Array.from(fullText.matchAll(amountPattern));
-      const frequencyMatch = fullText.match(frequencyPattern);
+      const extraction = await extractToolData(email);
+      extractionsUsed++;
 
-      // Calculate confidence based on signals
-      let confidence = 50;
-      if (inSender) confidence += 30;
-      if (inSubject) confidence += 20;
-      if (hasContext) confidence += 10;
-      if (amountMatches.length > 0) confidence += 15;
-      if (frequencyMatch) confidence += 10;
-      if (email.subject.toLowerCase().includes('invoice')) confidence += 10;
+      const validated = validateExtraction(extraction, email);
 
-      // Only create detection if confidence is high enough
-      if (confidence < 70) {
+      await supabase.from('ai_extraction_logs').insert({
+        user_id: connection.user_id,
+        email_id: email.id,
+        email_subject: email.subject,
+        classification_confidence: classification.confidence,
+        extraction_attempted: true,
+        extraction_success: !!validated,
+        validation_passed: !!validated,
+        failure_reason: validated ? null : 'Validation failed',
+      });
+
+      if (!validated) {
         continue;
       }
 
-      // Find the most likely amount (prefer larger amounts as they're more likely to be the actual charge)
-      let amount: number | undefined;
-      if (amountMatches.length > 0) {
-        const amounts = amountMatches.map(m => parseFloat(m[1].replace(/,/g, '')));
-        amount = Math.max(...amounts);
-      }
+      const { created, updated } = await upsertTool(supabase, validated, connection, email);
+      if (created) toolsCreated++;
+      if (updated) toolsUpdated++;
 
-      tools.push({
-        vendorName: vendor.name,
-        normalizedVendor: vendor.name.toLowerCase().replace(/\s+/g, '_'),
-        amount,
-        date: email.date,
-        billingFrequency: frequencyMatch ? frequencyMatch[1].toLowerCase() : 'unknown',
-        confidence,
+    } catch (error) {
+      console.error(`Error processing email ${email.id}:`, error);
+
+      await supabase.from('ai_extraction_logs').insert({
+        user_id: connection.user_id,
+        email_id: email.id,
+        email_subject: email.subject,
+        extraction_attempted: false,
+        extraction_success: false,
+        validation_passed: false,
+        failure_reason: error.message,
       });
     }
   }
 
-  return tools;
-}
+  await supabase.rpc('increment_scan_counters', {
+    p_user_id: connection.user_id,
+    p_emails: emails.length,
+    p_classifications: classificationsUsed,
+    p_extractions: extractionsUsed,
+  });
 
-async function upsertTools(
-  supabase: any,
-  detectedTools: DetectedTool[],
-  connection: any
-): Promise<{ toolsCreated: number; toolsUpdated: number }> {
-  let toolsCreated = 0;
-  let toolsUpdated = 0;
-
-  console.log(`Upserting ${detectedTools.length} tools for organization ${connection.organization_id}`);
-
-  for (const tool of detectedTools) {
-    console.log('Processing tool:', tool.vendorName, tool.normalizedVendor);
-
-    const { data: existing, error: selectError } = await supabase
-      .from('detected_tools')
-      .select('*')
-      .eq('organization_id', connection.organization_id)
-      .eq('normalized_vendor', tool.normalizedVendor)
-      .maybeSingle();
-
-    if (selectError) {
-      console.error('Error checking existing tool:', selectError);
-      continue;
-    }
-
-    if (existing) {
-      console.log('Updating existing tool:', existing.id);
-      const { error: updateError } = await supabase
-        .from('detected_tools')
-        .update({
-          last_charge_amount: tool.amount,
-          last_charge_date: tool.date?.split('T')[0],
-          billing_frequency: tool.billingFrequency,
-          renewal_count: existing.renewal_count + 1,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', existing.id);
-
-      if (updateError) {
-        console.error('Error updating tool:', updateError);
-      } else {
-        toolsUpdated++;
-      }
-    } else {
-      const estimatedRenewal = tool.date ? calculateRenewalDate(tool.date, tool.billingFrequency || 'monthly') : null;
-
-      console.log('Creating new tool:', tool.vendorName);
-      const { data: inserted, error: insertError } = await supabase
-        .from('detected_tools')
-        .insert({
-          organization_id: connection.organization_id,
-          vendor_name: tool.vendorName,
-          normalized_vendor: tool.normalizedVendor,
-          last_charge_amount: tool.amount,
-          last_charge_date: tool.date?.split('T')[0],
-          billing_frequency: tool.billingFrequency,
-          estimated_renewal_date: estimatedRenewal,
-          first_seen_date: tool.date?.split('T')[0] || new Date().toISOString().split('T')[0],
-          source_email_connection_id: connection.id,
-          confidence_score: tool.confidence,
-          inferred_owner_id: connection.user_id,
-          status: 'active',
-        })
-        .select();
-
-      if (insertError) {
-        console.error('Error inserting tool:', JSON.stringify(insertError));
-      } else {
-        console.log('Successfully created tool:', JSON.stringify(inserted));
-        toolsCreated++;
-
-        const { data: verifyInsert, error: verifyError } = await supabase
-          .from('detected_tools')
-          .select('id')
-          .eq('id', inserted[0].id)
-          .maybeSingle();
-
-        if (verifyError) {
-          console.error('Error verifying insert:', JSON.stringify(verifyError));
-        } else if (!verifyInsert) {
-          console.error('CRITICAL: Tool was inserted but cannot be found:', inserted[0].id);
-        } else {
-          console.log('Verified tool exists in database:', verifyInsert.id);
-        }
-      }
-    }
-  }
-
-  console.log(`Upsert complete: ${toolsCreated} created, ${toolsUpdated} updated`);
   return { toolsCreated, toolsUpdated };
 }
 
-function calculateRenewalDate(lastDate: string, frequency: string): string {
-  const date = new Date(lastDate);
-  switch (frequency) {
-    case 'monthly':
-      date.setMonth(date.getMonth() + 1);
-      break;
-    case 'annual':
-    case 'yearly':
-      date.setFullYear(date.getFullYear() + 1);
-      break;
-    case 'quarterly':
-      date.setMonth(date.getMonth() + 3);
-      break;
-    default:
-      date.setMonth(date.getMonth() + 1);
+async function classifyEmail(email: EmailMessage): Promise<ClassificationResult> {
+  const openaiKey = Deno.env.get('OPENAI_API_KEY');
+
+  if (!openaiKey) {
+    throw new Error('OpenAI API key not configured');
   }
-  return date.toISOString().split('T')[0];
+
+  const prompt = `Analyze if this email is about a SaaS tool, software subscription, or recurring service charge.
+
+Email Subject: ${email.subject}
+From: ${email.sender}
+Body Preview: ${email.body.substring(0, 1000)}
+
+EXCLUDE:
+- Food delivery (DoorDash, Uber Eats, etc.)
+- Travel bookings (flights, hotels)
+- One-time purchases
+- Refund emails without future charges
+- Marketing newsletters
+- E-commerce receipts
+
+Respond with JSON only:
+{
+  "is_tool_related": boolean,
+  "confidence": number (0-100),
+  "reason": "brief explanation"
+}`;
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${openaiKey}`,
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: 'You are a precise classifier. Respond only with valid JSON.' },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.1,
+      max_tokens: 150,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`OpenAI API error: ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  const content = data.choices[0]?.message?.content || '{}';
+
+  try {
+    return JSON.parse(content);
+  } catch {
+    return { is_tool_related: false, confidence: 0, reason: 'Parse error' };
+  }
+}
+
+async function extractToolData(email: EmailMessage): Promise<ExtractionResult> {
+  const openaiKey = Deno.env.get('OPENAI_API_KEY');
+
+  const prompt = `Extract subscription/tool information from this email.
+
+Email Subject: ${email.subject}
+From: ${email.sender}
+Body: ${email.body}
+
+Extract the following. Use null for unknown values. NEVER guess or invent:
+
+{
+  "vendor_name": string or null (company name),
+  "amount": number or null (price only, no currency symbols),
+  "currency": string or null (USD, EUR, etc.),
+  "billing_cycle": "monthly" | "yearly" | "trial" | null,
+  "renewal_date": string or null (YYYY-MM-DD format),
+  "is_trial": boolean (true only if explicitly mentioned),
+  "is_cancellation": boolean (true only if subscription ended),
+  "confidence": number (0-100),
+  "reason": "brief explanation of what was detected"
+}
+
+Be conservative. If unsure, use null.`;
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${openaiKey}`,
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: 'You are a precise data extractor. Respond only with valid JSON. Never invent information.' },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0,
+      max_tokens: 300,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`OpenAI API error: ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  const content = data.choices[0]?.message?.content || '{}';
+
+  try {
+    return JSON.parse(content);
+  } catch {
+    return {
+      vendor_name: null,
+      amount: null,
+      currency: null,
+      billing_cycle: null,
+      renewal_date: null,
+      is_trial: false,
+      is_cancellation: false,
+      confidence: 0,
+      reason: 'Parse error',
+    };
+  }
+}
+
+function validateExtraction(extraction: ExtractionResult, email: EmailMessage): ExtractionResult | null {
+  if (!extraction.vendor_name) {
+    return null;
+  }
+
+  if (extraction.confidence < 40) {
+    return null;
+  }
+
+  if (!extraction.is_trial && !extraction.amount && !extraction.renewal_date) {
+    return null;
+  }
+
+  if (extraction.amount && (extraction.amount < 0 || extraction.amount > 100000)) {
+    return null;
+  }
+
+  if (extraction.renewal_date) {
+    const renewalDate = new Date(extraction.renewal_date);
+    const now = new Date();
+    const oneYearFromNow = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
+
+    if (isNaN(renewalDate.getTime()) || renewalDate < now || renewalDate > oneYearFromNow) {
+      extraction.renewal_date = null;
+    }
+  }
+
+  if (extraction.currency && !/^[A-Z]{3}$/.test(extraction.currency)) {
+    extraction.currency = 'USD';
+  }
+
+  return extraction;
+}
+
+async function upsertTool(
+  supabase: any,
+  extraction: ExtractionResult,
+  connection: any,
+  email: EmailMessage
+): Promise<{ created: boolean; updated: boolean }> {
+  const normalizedVendor = extraction.vendor_name!.toLowerCase().replace(/[^a-z0-9]/g, '_');
+
+  const { data: existing } = await supabase
+    .from('detected_tools')
+    .select('*')
+    .eq('organization_id', connection.organization_id)
+    .eq('normalized_vendor', normalizedVendor)
+    .maybeSingle();
+
+  if (existing) {
+    const updates: any = {
+      updated_at: new Date().toISOString(),
+    };
+
+    if (extraction.amount) {
+      updates.last_charge_amount = extraction.amount;
+      updates.last_charge_date = email.date.split('T')[0];
+    }
+
+    if (extraction.billing_cycle) {
+      updates.billing_frequency = extraction.billing_cycle;
+    }
+
+    if (extraction.renewal_date) {
+      updates.estimated_renewal_date = extraction.renewal_date;
+    }
+
+    if (extraction.is_cancellation) {
+      updates.status = 'cancelled';
+    } else if (extraction.is_trial) {
+      updates.status = 'trial';
+    } else if (existing.status !== 'cancelled') {
+      updates.status = 'active';
+      updates.renewal_count = existing.renewal_count + 1;
+    }
+
+    await supabase
+      .from('detected_tools')
+      .update(updates)
+      .eq('id', existing.id);
+
+    return { created: false, updated: true };
+  } else {
+    await supabase
+      .from('detected_tools')
+      .insert({
+        organization_id: connection.organization_id,
+        vendor_name: extraction.vendor_name,
+        normalized_vendor: normalizedVendor,
+        last_charge_amount: extraction.amount,
+        last_charge_date: extraction.amount ? email.date.split('T')[0] : null,
+        billing_frequency: extraction.billing_cycle || 'unknown',
+        estimated_renewal_date: extraction.renewal_date,
+        first_seen_date: email.date.split('T')[0],
+        source_email_connection_id: connection.id,
+        source_email_id: email.id,
+        source_email_subject: email.subject,
+        source_email_sender: email.sender,
+        confidence_score: extraction.confidence,
+        ai_confidence: extraction.confidence,
+        detection_reason: extraction.reason,
+        inferred_owner_id: connection.user_id,
+        status: extraction.is_trial ? 'trial' : extraction.is_cancellation ? 'cancelled' : 'active',
+      });
+
+    return { created: true, updated: false };
+  }
 }
 
 async function generateInterruptions(
