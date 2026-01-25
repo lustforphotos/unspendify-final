@@ -19,23 +19,7 @@ SELECT cron.schedule(
   $$
 );
 
--- 2. Detect tools daily at 3 AM
-SELECT cron.schedule(
-  'detect-tools-daily',
-  '0 3 * * *',
-  $$
-  SELECT net.http_post(
-    url := current_setting('app.settings.supabase_url') || '/functions/v1/detect-tools',
-    headers := jsonb_build_object(
-      'Content-Type', 'application/json',
-      'Authorization', 'Bearer ' || current_setting('app.settings.service_role_key')
-    ),
-    body := '{}'::jsonb
-  ) AS request_id;
-  $$
-);
-
--- 3. Schedule notifications daily at 9 AM
+-- 2. Schedule notifications daily at 9 AM
 SELECT cron.schedule(
   'schedule-notifications-daily',
   '0 9 * * *',
@@ -51,7 +35,7 @@ SELECT cron.schedule(
   $$
 );
 
--- 4. Send notifications every 5 minutes
+-- 3. Send notifications every 5 minutes
 SELECT cron.schedule(
   'send-notifications-periodic',
   '*/5 * * * *',
