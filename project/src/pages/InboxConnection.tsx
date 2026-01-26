@@ -22,6 +22,7 @@ export default function InboxConnection() {
   const [oauthStatus, setOauthStatus] = useState<any>(null);
   const [scanCompleted, setScanCompleted] = useState(false);
   const [redirectCountdown, setRedirectCountdown] = useState<number | null>(null);
+  const [scanning, setScanning] = useState<string | null>(null);
 
   useEffect(() => {
     loadConnections();
@@ -75,15 +76,19 @@ export default function InboxConnection() {
   async function loadConnections() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
+      console.log('User loaded:', user?.id);
       if (!user) return;
 
-      const { data: member } = await supabase
+      const { data: member, error: memberError } = await supabase
         .from('organization_members')
         .select('organization_id')
         .eq('user_id', user.id)
         .single();
 
+      console.log('Organization member query:', { member, memberError });
+
       if (member) {
+        console.log('Setting organization ID:', member.organization_id);
         setOrganizationId(member.organization_id);
 
         const { data } = await supabase
@@ -93,6 +98,8 @@ export default function InboxConnection() {
           .order('created_at', { ascending: false });
 
         setConnections(data || []);
+      } else {
+        console.error('No organization membership found for user');
       }
     } catch (error) {
       console.error('Error loading connections:', error);
@@ -102,7 +109,13 @@ export default function InboxConnection() {
   }
 
   async function connectInbox(provider: 'gmail' | 'outlook') {
-    if (!organizationId) return;
+    console.log('Connect inbox clicked. Organization ID:', organizationId);
+
+    if (!organizationId) {
+      console.error('No organization ID available');
+      setError('Organization not found. Please refresh the page and try again.');
+      return;
+    }
 
     setConnecting(provider);
     setError(null);
@@ -185,6 +198,50 @@ export default function InboxConnection() {
       loadConnections();
     } catch (error) {
       console.error('Error disconnecting:', error);
+    }
+  }
+
+  async function triggerManualScan(connectionId: string, scanType: 'backfill' | 'daily' = 'daily') {
+    setScanning(connectionId);
+    setError(null);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error('Not authenticated');
+      }
+
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/scan-emails`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            connectionId,
+            scanType,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Failed to start scan' }));
+        throw new Error(errorData.error || 'Failed to start scan');
+      }
+
+      const result = await response.json();
+      console.log('Scan result:', result);
+
+      alert('Scan started successfully! Check the ai_extraction_logs table in Supabase to see results.');
+
+      setTimeout(() => loadConnections(), 2000);
+    } catch (err: any) {
+      console.error('Error triggering scan:', err);
+      setError(err.message || 'Failed to trigger scan');
+    } finally {
+      setScanning(null);
     }
   }
 
@@ -396,14 +453,32 @@ export default function InboxConnection() {
                     )}
                   </div>
                 </div>
-                {conn.is_active && (
-                  <button
-                    onClick={() => disconnectInbox(conn.id)}
-                    className="text-sm text-red-600 hover:text-red-700 font-medium"
-                  >
-                    Disconnect
-                  </button>
-                )}
+                <div className="flex items-center gap-3">
+                  {conn.is_active && (
+                    <button
+                      onClick={() => triggerManualScan(conn.id, 'daily')}
+                      disabled={scanning === conn.id}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50 flex items-center gap-2 text-sm"
+                    >
+                      {scanning === conn.id ? (
+                        <>
+                          <Loader className="w-4 h-4 animate-spin" />
+                          Scanning...
+                        </>
+                      ) : (
+                        'Test Scan'
+                      )}
+                    </button>
+                  )}
+                  {conn.is_active && (
+                    <button
+                      onClick={() => disconnectInbox(conn.id)}
+                      className="text-sm text-red-600 hover:text-red-700 font-medium"
+                    >
+                      Disconnect
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
 
