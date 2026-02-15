@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Package, Search, Filter, DollarSign, Calendar, AlertCircle, X, Save } from 'lucide-react';
-import AppLayout from '../components/AppLayout';
+import { Package, Search, Filter, DollarSign, Calendar, AlertCircle, X, Save, ArrowLeft, BarChart3, Home, XCircle } from 'lucide-react';
 import ToolClassificationActions from '../components/ToolClassificationActions';
 import { supabase } from '../lib/supabase';
 import { getCategoryLabel, getCategoryColor } from '../lib/classification';
@@ -24,6 +23,9 @@ interface ToolWithDetails extends Tool {
   owner_email?: string | null;
 }
 
+type SortField = 'vendor_name' | 'last_charge_amount' | 'estimated_renewal_date' | 'first_seen_date';
+type SortOrder = 'asc' | 'desc';
+
 export default function Tools() {
   const [tools, setTools] = useState<ToolWithDetails[]>([]);
   const [filteredTools, setFilteredTools] = useState<ToolWithDetails[]>([]);
@@ -32,16 +34,59 @@ export default function Tools() {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [categoryFilter, setcategoryFilter] = useState<string>('all');
+  const [sortField, setSortField] = useState<SortField>('vendor_name');
+  const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
   const [editingTool, setEditingTool] = useState<ToolWithDetails | null>(null);
   const [saving, setSaving] = useState(false);
+  const [referrer, setReferrer] = useState<string | null>(null);
 
   useEffect(() => {
+    initializeFromURL();
     loadTools();
   }, []);
 
   useEffect(() => {
-    filterTools();
-  }, [tools, searchQuery, statusFilter, categoryFilter]);
+    filterAndSortTools();
+  }, [tools, searchQuery, statusFilter, categoryFilter, sortField, sortOrder]);
+
+  useEffect(() => {
+    updateURL();
+  }, [searchQuery, statusFilter, categoryFilter, sortField, sortOrder]);
+
+  const initializeFromURL = () => {
+    const params = new URLSearchParams(window.location.search);
+
+    const search = params.get('search');
+    const status = params.get('status');
+    const category = params.get('category');
+    const sort = params.get('sort') as SortField;
+    const order = params.get('order') as SortOrder;
+    const from = params.get('from');
+
+    if (search) setSearchQuery(search);
+    if (status) setStatusFilter(status);
+    if (category) setcategoryFilter(category);
+    if (sort) setSortField(sort);
+    if (order) setSortOrder(order);
+    if (from) setReferrer(from);
+  };
+
+  const updateURL = () => {
+    const params = new URLSearchParams();
+
+    if (searchQuery) params.set('search', searchQuery);
+    if (statusFilter !== 'all') params.set('status', statusFilter);
+    if (categoryFilter !== 'all') params.set('category', categoryFilter);
+    if (sortField !== 'vendor_name') params.set('sort', sortField);
+    if (sortOrder !== 'asc') params.set('order', sortOrder);
+    if (referrer) params.set('from', referrer);
+
+    const newURL = params.toString()
+      ? `${window.location.pathname}?${params.toString()}`
+      : window.location.pathname;
+
+    window.history.replaceState({}, '', newURL);
+  };
 
   const loadTools = async () => {
     try {
@@ -65,7 +110,7 @@ export default function Tools() {
     }
   };
 
-  const filterTools = () => {
+  const filterAndSortTools = () => {
     let filtered = [...tools];
 
     if (searchQuery) {
@@ -82,7 +127,71 @@ export default function Tools() {
       filtered = filtered.filter((tool) => tool.tool_category === categoryFilter);
     }
 
+    filtered.sort((a, b) => {
+      let aValue: any = a[sortField];
+      let bValue: any = b[sortField];
+
+      if (sortField === 'vendor_name') {
+        aValue = (aValue || '').toLowerCase();
+        bValue = (bValue || '').toLowerCase();
+      } else if (sortField === 'last_charge_amount') {
+        aValue = aValue || 0;
+        bValue = bValue || 0;
+      } else if (sortField === 'estimated_renewal_date' || sortField === 'first_seen_date') {
+        aValue = aValue ? new Date(aValue).getTime() : 0;
+        bValue = bValue ? new Date(bValue).getTime() : 0;
+      }
+
+      if (sortOrder === 'asc') {
+        return aValue > bValue ? 1 : aValue < bValue ? -1 : 0;
+      } else {
+        return aValue < bValue ? 1 : aValue > bValue ? -1 : 0;
+      }
+    });
+
     setFilteredTools(filtered);
+  };
+
+  const clearAllFilters = () => {
+    setSearchQuery('');
+    setStatusFilter('all');
+    setcategoryFilter('all');
+    setSortField('vendor_name');
+    setSortOrder('asc');
+  };
+
+  const hasActiveFilters = () => {
+    return searchQuery !== '' || statusFilter !== 'all' || categoryFilter !== 'all';
+  };
+
+  const getReferrerLabel = () => {
+    switch (referrer) {
+      case 'dashboard':
+        return 'Dashboard';
+      case 'analytics':
+        return 'Analytics';
+      case 'interruptions':
+        return 'Interruptions';
+      case 'renewals':
+        return 'Renewals';
+      default:
+        return null;
+    }
+  };
+
+  const getReferrerPath = () => {
+    switch (referrer) {
+      case 'dashboard':
+        return '/app';
+      case 'analytics':
+        return '/app/analytics';
+      case 'interruptions':
+        return '/app/interruptions';
+      case 'renewals':
+        return '/app/renewals';
+      default:
+        return '/app';
+    }
   };
 
   const handleEdit = (tool: Tool) => {
@@ -133,37 +242,114 @@ export default function Tools() {
 
   if (loading) {
     return (
-      <AppLayout currentPath="/app/tools">
-        <div className="flex items-center justify-center py-12">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-slate-900 mx-auto mb-4"></div>
-            <p className="text-slate-600">Loading tools...</p>
-          </div>
+      <div className="flex items-center justify-center py-12">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-slate-900 mx-auto mb-4"></div>
+          <p className="text-slate-600">Loading tools...</p>
         </div>
-      </AppLayout>
+      </div>
     );
   }
 
   if (error) {
     return (
-      <AppLayout currentPath="/app/tools">
-        <div className="flex items-center justify-center py-12">
-          <div className="text-center">
-            <AlertCircle className="mx-auto mb-4 text-red-600" size={48} />
-            <p className="text-slate-900 font-medium mb-2">Failed to load tools</p>
-            <p className="text-slate-600">{error}</p>
-          </div>
+      <div className="flex items-center justify-center py-12">
+        <div className="text-center">
+          <AlertCircle className="mx-auto mb-4 text-red-600" size={48} />
+          <p className="text-slate-900 font-medium mb-2">Failed to load tools</p>
+          <p className="text-slate-600">{error}</p>
         </div>
-      </AppLayout>
+      </div>
     );
   }
 
   return (
-    <AppLayout currentPath="/app/tools">
-      <div>
+    <div>
+        {referrer && (
+          <div className="mb-6">
+            <a
+              href={getReferrerPath()}
+              className="inline-flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 font-medium"
+            >
+              <ArrowLeft size={16} />
+              Back to {getReferrerLabel()}
+            </a>
+          </div>
+        )}
+
         <div className="mb-8">
-          <h1 className="text-3xl font-semibold text-slate-900 mb-2">Tools</h1>
-          <p className="text-slate-600">Manage all your subscription tools</p>
+          <div className="flex items-start justify-between mb-4">
+            <div className="flex-1">
+              <h1 className="text-3xl font-semibold text-slate-900 mb-2">All Tools</h1>
+              <p className="text-slate-600">
+                {filteredTools.length === tools.length
+                  ? `Manage all ${tools.length} subscription tools`
+                  : `Showing ${filteredTools.length} of ${tools.length} tools`}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <a
+                href="/app"
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+              >
+                <Home size={16} />
+                Dashboard
+              </a>
+              <a
+                href="/app/analytics"
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+              >
+                <BarChart3 size={16} />
+                Analytics
+              </a>
+            </div>
+          </div>
+
+          {hasActiveFilters() && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm text-slate-600">Active filters:</span>
+              {searchQuery && (
+                <span className="inline-flex items-center gap-1 px-3 py-1 bg-blue-100 text-blue-700 text-sm rounded-full">
+                  Search: "{searchQuery}"
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="hover:text-blue-900"
+                  >
+                    <X size={14} />
+                  </button>
+                </span>
+              )}
+              {statusFilter !== 'all' && (
+                <span className="inline-flex items-center gap-1 px-3 py-1 bg-blue-100 text-blue-700 text-sm rounded-full">
+                  Status: {statusFilter}
+                  <button
+                    onClick={() => setStatusFilter('all')}
+                    className="hover:text-blue-900"
+                  >
+                    <X size={14} />
+                  </button>
+                </span>
+              )}
+              {categoryFilter !== 'all' && (
+                <span className="inline-flex items-center gap-1 px-3 py-1 bg-blue-100 text-blue-700 text-sm rounded-full">
+                  Category: {categoryFilter}
+                  <button
+                    onClick={() => setcategoryFilter('all')}
+                    className="hover:text-blue-900"
+                  >
+                    <X size={14} />
+                  </button>
+                </span>
+              )}
+              <button
+                onClick={clearAllFilters}
+                className="text-sm text-slate-600 hover:text-slate-900 underline"
+              >
+                Clear all
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="bg-white rounded-xl border border-slate-200 p-6 mb-6">
@@ -187,39 +373,113 @@ export default function Tools() {
 
         <div className="bg-white rounded-xl border border-slate-200 mb-6">
           <div className="p-6 border-b border-slate-200">
-            <div className="flex flex-col md:flex-row gap-4">
-              <div className="flex-1 relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                <input
-                  type="text"
-                  placeholder="Search tools..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent"
-                />
+            <div className="space-y-4">
+              <div className="flex flex-col md:flex-row gap-4">
+                <div className="flex-1 relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                  <input
+                    type="text"
+                    placeholder="Search by tool name..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <Filter className="text-slate-400 flex-shrink-0" size={18} />
+                  <select
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value)}
+                    className="px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent"
+                  >
+                    <option value="all">All Status</option>
+                    <option value="active">Active</option>
+                    <option value="trial">Trial</option>
+                    <option value="cancelled">Cancelled</option>
+                  </select>
+                  <select
+                    value={categoryFilter}
+                    onChange={(e) => setcategoryFilter(e.target.value)}
+                    className="px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent"
+                  >
+                    <option value="all">All Categories</option>
+                    <option value="marketing">Marketing</option>
+                    <option value="marketing_adjacent">Marketing-Related</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <Filter className="text-slate-400" size={18} />
-                <select
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
-                  className="px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent"
+
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-slate-600">Sort by:</span>
+                <button
+                  onClick={() => {
+                    if (sortField === 'vendor_name') {
+                      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+                    } else {
+                      setSortField('vendor_name');
+                      setSortOrder('asc');
+                    }
+                  }}
+                  className={`px-3 py-1 rounded-lg ${
+                    sortField === 'vendor_name'
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
                 >
-                  <option value="all">All Status</option>
-                  <option value="active">Active</option>
-                  <option value="trial">Trial</option>
-                  <option value="cancelled">Cancelled</option>
-                </select>
-                <select
-                  value={categoryFilter}
-                  onChange={(e) => setcategoryFilter(e.target.value)}
-                  className="px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent"
+                  Name {sortField === 'vendor_name' && (sortOrder === 'asc' ? '↑' : '↓')}
+                </button>
+                <button
+                  onClick={() => {
+                    if (sortField === 'last_charge_amount') {
+                      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+                    } else {
+                      setSortField('last_charge_amount');
+                      setSortOrder('desc');
+                    }
+                  }}
+                  className={`px-3 py-1 rounded-lg ${
+                    sortField === 'last_charge_amount'
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
                 >
-                  <option value="all">All Categories</option>
-                  <option value="marketing">Marketing</option>
-                  <option value="marketing_adjacent">Marketing-Related</option>
-                  <option value="other">Other</option>
-                </select>
+                  Cost {sortField === 'last_charge_amount' && (sortOrder === 'asc' ? '↑' : '↓')}
+                </button>
+                <button
+                  onClick={() => {
+                    if (sortField === 'estimated_renewal_date') {
+                      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+                    } else {
+                      setSortField('estimated_renewal_date');
+                      setSortOrder('asc');
+                    }
+                  }}
+                  className={`px-3 py-1 rounded-lg ${
+                    sortField === 'estimated_renewal_date'
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  Renewal {sortField === 'estimated_renewal_date' && (sortOrder === 'asc' ? '↑' : '↓')}
+                </button>
+                <button
+                  onClick={() => {
+                    if (sortField === 'first_seen_date') {
+                      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+                    } else {
+                      setSortField('first_seen_date');
+                      setSortOrder('desc');
+                    }
+                  }}
+                  className={`px-3 py-1 rounded-lg ${
+                    sortField === 'first_seen_date'
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  Detected {sortField === 'first_seen_date' && (sortOrder === 'asc' ? '↑' : '↓')}
+                </button>
               </div>
             </div>
           </div>
@@ -257,9 +517,40 @@ export default function Tools() {
               <tbody className="divide-y divide-slate-200">
                 {filteredTools.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-6 py-12 text-center">
-                      <Package className="mx-auto mb-3 text-slate-400" size={32} />
-                      <p className="text-slate-600">No tools found</p>
+                    <td colSpan={8} className="px-6 py-16 text-center">
+                      {hasActiveFilters() ? (
+                        <div>
+                          <XCircle className="mx-auto mb-4 text-slate-400" size={48} />
+                          <h3 className="text-lg font-semibold text-slate-900 mb-2">
+                            No tools match your filters
+                          </h3>
+                          <p className="text-slate-600 mb-6">
+                            Try adjusting your search or filter criteria
+                          </p>
+                          <button
+                            onClick={clearAllFilters}
+                            className="inline-flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-lg font-medium hover:bg-slate-800 transition-colors"
+                          >
+                            Clear all filters
+                          </button>
+                        </div>
+                      ) : (
+                        <div>
+                          <Package className="mx-auto mb-4 text-slate-400" size={48} />
+                          <h3 className="text-lg font-semibold text-slate-900 mb-2">
+                            No tools detected yet
+                          </h3>
+                          <p className="text-slate-600 mb-6">
+                            Connect your inbox to automatically detect subscription tools
+                          </p>
+                          <a
+                            href="/app/inbox"
+                            className="inline-flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-lg font-medium hover:bg-slate-800 transition-colors"
+                          >
+                            Connect Inbox
+                          </a>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ) : (
@@ -322,7 +613,6 @@ export default function Tools() {
             </table>
           </div>
         </div>
-      </div>
 
       {editingTool && (
         <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-6 z-50">
@@ -381,6 +671,6 @@ export default function Tools() {
           </div>
         </div>
       )}
-    </AppLayout>
+    </div>
   );
 }
