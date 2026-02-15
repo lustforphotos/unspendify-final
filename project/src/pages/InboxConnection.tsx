@@ -227,8 +227,15 @@ export default function InboxConnection() {
       );
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Failed to start scan' }));
-        throw new Error(errorData.error || 'Failed to start scan');
+        const errorText = await response.text();
+        console.error('Scan error response:', response.status, errorText);
+        let errorData;
+        try {
+          errorData = JSON.parse(errorText);
+        } catch {
+          errorData = { error: errorText || 'Failed to start scan' };
+        }
+        throw new Error(errorData.error || `Scan failed with status ${response.status}`);
       }
 
       const result = await response.json();
@@ -247,17 +254,14 @@ export default function InboxConnection() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white pt-24 pb-16">
-        <div className="max-w-4xl mx-auto px-6 text-center">
-          <Loader className="w-8 h-8 animate-spin mx-auto text-blue-600" />
-        </div>
+      <div className="flex items-center justify-center py-12">
+        <Loader className="w-8 h-8 animate-spin text-blue-600" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white pt-24 pb-16">
-      <div className="max-w-4xl mx-auto px-6">
+    <div>
         <div className="text-center mb-12">
           <h1 className="text-4xl font-bold text-slate-900 mb-4">
             Connect Your Inbox
@@ -561,7 +565,6 @@ export default function InboxConnection() {
             </div>
           </div>
         </div>
-      </div>
     </div>
   );
 }
