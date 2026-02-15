@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
-import { TrendingUp, DollarSign, Package, Calendar, AlertCircle } from 'lucide-react';
-import AppLayout from '../components/AppLayout';
+import { TrendingUp, DollarSign, Package, Calendar, AlertCircle, ArrowLeft, Home } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 interface Tool {
@@ -30,8 +29,13 @@ export default function Analytics() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [timeRange, setTimeRange] = useState<'30' | '90' | '365'>('30');
+  const [referrer, setReferrer] = useState<string | null>(null);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const from = params.get('from');
+    if (from) setReferrer(from);
+
     loadAnalytics();
   }, []);
 
@@ -113,37 +117,66 @@ export default function Analytics() {
 
   if (loading) {
     return (
-      <AppLayout currentPath="/app/analytics">
-        <div className="flex items-center justify-center py-12">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-slate-900 mx-auto mb-4"></div>
-            <p className="text-slate-600">Loading analytics...</p>
-          </div>
+      <div className="flex items-center justify-center py-12">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-slate-900 mx-auto mb-4"></div>
+          <p className="text-slate-600">Loading analytics...</p>
         </div>
-      </AppLayout>
+      </div>
     );
   }
 
   if (error) {
     return (
-      <AppLayout currentPath="/app/analytics">
-        <div className="flex items-center justify-center py-12">
-          <div className="text-center">
-            <AlertCircle className="mx-auto mb-4 text-red-600" size={48} />
-            <p className="text-slate-900 font-medium mb-2">Failed to load analytics</p>
-            <p className="text-slate-600">{error}</p>
-          </div>
+      <div className="flex items-center justify-center py-12">
+        <div className="text-center">
+          <AlertCircle className="mx-auto mb-4 text-red-600" size={48} />
+          <p className="text-slate-900 font-medium mb-2">Failed to load analytics</p>
+          <p className="text-slate-600">{error}</p>
         </div>
-      </AppLayout>
+      </div>
     );
   }
 
   return (
-    <AppLayout currentPath="/app/analytics">
+    <div>
       <div>
+        {referrer === 'dashboard' && (
+          <div className="mb-6">
+            <a
+              href="/app"
+              className="inline-flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 font-medium"
+            >
+              <ArrowLeft size={16} />
+              Back to Dashboard
+            </a>
+          </div>
+        )}
+
         <div className="mb-8">
-          <h1 className="text-3xl font-semibold text-slate-900 mb-2">Analytics</h1>
-          <p className="text-slate-600">Insights into your subscription spending</p>
+          <div className="flex items-start justify-between mb-4">
+            <div className="flex-1">
+              <h1 className="text-3xl font-semibold text-slate-900 mb-2">Analytics</h1>
+              <p className="text-slate-600">Insights into your subscription spending</p>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <a
+                href="/app"
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+              >
+                <Home size={16} />
+                Dashboard
+              </a>
+              <a
+                href="/app/tools?from=analytics"
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+              >
+                <Package size={16} />
+                All Tools
+              </a>
+            </div>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
@@ -237,7 +270,15 @@ export default function Analytics() {
           </div>
 
           <div className="bg-white rounded-xl border border-slate-200 p-6">
-            <h2 className="text-lg font-semibold text-slate-900 mb-6">Top 5 Expenses</h2>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-lg font-semibold text-slate-900">Top 5 Expenses</h2>
+              <a
+                href="/app/tools?from=analytics&sort=last_charge_amount&order=desc"
+                className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+              >
+                View all →
+              </a>
+            </div>
 
             {spending.topTools.length === 0 ? (
               <div className="text-center py-8">
@@ -303,6 +344,6 @@ export default function Analytics() {
           </div>
         </div>
       </div>
-    </AppLayout>
+    </div>
   );
 }
