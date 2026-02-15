@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { Calendar, AlertCircle, Clock, DollarSign } from 'lucide-react';
-import AppLayout from '../components/AppLayout';
 import { supabase } from '../lib/supabase';
 
 interface Tool {
@@ -141,20 +140,20 @@ export default function Renewals() {
 
   if (loading) {
     return (
-      <AppLayout currentPath="/app/renewals">
+      <div>
         <div className="flex items-center justify-center py-12">
           <div className="text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-slate-900 mx-auto mb-4"></div>
             <p className="text-slate-600">Loading renewals...</p>
           </div>
         </div>
-      </AppLayout>
+      </div>
     );
   }
 
   if (error) {
     return (
-      <AppLayout currentPath="/app/renewals">
+      <div>
         <div className="flex items-center justify-center py-12">
           <div className="text-center">
             <AlertCircle className="mx-auto mb-4 text-red-600" size={48} />
@@ -162,12 +161,12 @@ export default function Renewals() {
             <p className="text-slate-600">{error}</p>
           </div>
         </div>
-      </AppLayout>
+      </div>
     );
   }
 
   return (
-    <AppLayout currentPath="/app/renewals">
+    <div>
       <div>
         <div className="mb-8">
           <h1 className="text-3xl font-semibold text-slate-900 mb-2">Renewals</h1>
@@ -255,6 +254,6 @@ export default function Renewals() {
           </div>
         )}
       </div>
-    </AppLayout>
+    </div>
   );
 }
