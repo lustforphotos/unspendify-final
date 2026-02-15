@@ -19,7 +19,9 @@ import GettingStarted from './pages/GettingStarted';
 import InboxConnection from './pages/InboxConnection';
 import Interruptions from './pages/Interruptions';
 import Billing from './pages/Billing';
+import Notifications from './pages/Notifications';
 import ProtectedRoute from './components/ProtectedRoute';
+import AppLayout from './components/AppLayout';
 
 function App() {
   const [currentPath, setCurrentPath] = useState(window.location.pathname);
@@ -42,6 +44,16 @@ function App() {
       window.history.pushState = originalPushState;
     };
   }, []);
+
+  const renderAuthenticatedPage = (path: string, Component: React.ComponentType) => {
+    return (
+      <ProtectedRoute>
+        <AppLayout currentPath={path}>
+          <Component />
+        </AppLayout>
+      </ProtectedRoute>
+    );
+  };
 
   const renderPage = () => {
     switch (currentPath) {
@@ -70,53 +82,23 @@ function App() {
       case '/update-password':
         return <UpdatePassword />;
       case '/app':
-        return (
-          <ProtectedRoute>
-            <Dashboard />
-          </ProtectedRoute>
-        );
+        return renderAuthenticatedPage('/app', Dashboard);
       case '/app/tools':
-        return (
-          <ProtectedRoute>
-            <Tools />
-          </ProtectedRoute>
-        );
+        return renderAuthenticatedPage('/app/tools', Tools);
       case '/app/renewals':
-        return (
-          <ProtectedRoute>
-            <Renewals />
-          </ProtectedRoute>
-        );
+        return renderAuthenticatedPage('/app/renewals', Renewals);
       case '/app/settings':
-        return (
-          <ProtectedRoute>
-            <Settings />
-          </ProtectedRoute>
-        );
+        return renderAuthenticatedPage('/app/settings', Settings);
       case '/app/analytics':
-        return (
-          <ProtectedRoute>
-            <Analytics />
-          </ProtectedRoute>
-        );
+        return renderAuthenticatedPage('/app/analytics', Analytics);
       case '/app/inbox':
-        return (
-          <ProtectedRoute>
-            <InboxConnection />
-          </ProtectedRoute>
-        );
+        return renderAuthenticatedPage('/app/inbox', InboxConnection);
       case '/app/interruptions':
-        return (
-          <ProtectedRoute>
-            <Interruptions />
-          </ProtectedRoute>
-        );
+        return renderAuthenticatedPage('/app/interruptions', Interruptions);
       case '/app/billing':
-        return (
-          <ProtectedRoute>
-            <Billing />
-          </ProtectedRoute>
-        );
+        return renderAuthenticatedPage('/app/billing', Billing);
+      case '/app/notifications':
+        return renderAuthenticatedPage('/app/notifications', Notifications);
       default:
         return <Homepage />;
     }
