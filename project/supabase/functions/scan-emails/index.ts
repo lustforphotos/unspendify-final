@@ -435,6 +435,8 @@ async function processEmailsWithAI(
       const classification = await classifyEmail(email);
       classificationsUsed++;
 
+      await new Promise(resolve => setTimeout(resolve, 100));
+
       await supabase.from('ai_extraction_logs').insert({
         user_id: connection.user_id,
         email_id: email.id,
@@ -454,6 +456,8 @@ async function processEmailsWithAI(
 
       const extraction = await extractToolData(email);
       extractionsUsed++;
+
+      await new Promise(resolve => setTimeout(resolve, 100));
 
       const validated = validateExtraction(extraction, email);
 
@@ -529,35 +533,60 @@ Respond with JSON only:
   "reason": "brief explanation"
 }`;
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${openaiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: 'You are a precise classifier. Respond only with valid JSON.' },
-        { role: 'user', content: prompt }
-      ],
-      temperature: 0.1,
-      max_tokens: 150,
-    }),
-  });
+  const maxRetries = 3;
+  let lastError;
 
-  if (!response.ok) {
-    throw new Error(`OpenAI API error: ${response.statusText}`);
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    if (attempt > 0) {
+      const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+
+    try {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${openaiKey}`,
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: 'You are a precise classifier. Respond only with valid JSON.' },
+            { role: 'user', content: prompt }
+          ],
+          temperature: 0.1,
+          max_tokens: 150,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const content = data.choices[0]?.message?.content || '{}';
+
+        try {
+          return JSON.parse(content);
+        } catch {
+          return { is_tool_related: false, confidence: 0, reason: 'Parse error' };
+        }
+      }
+
+      if (response.status === 429) {
+        lastError = new Error('OpenAI API rate limit exceeded');
+        continue;
+      }
+
+      throw new Error(`OpenAI API error: ${response.statusText}`);
+    } catch (error) {
+      lastError = error;
+      if (error.message.includes('rate limit') || error.message.includes('429')) {
+        continue;
+      }
+      throw error;
+    }
   }
 
-  const data = await response.json();
-  const content = data.choices[0]?.message?.content || '{}';
-
-  try {
-    return JSON.parse(content);
-  } catch {
-    return { is_tool_related: false, confidence: 0, reason: 'Parse error' };
-  }
+  throw lastError || new Error('Max retries exceeded');
 }
 
 async function extractToolData(email: EmailMessage): Promise<ExtractionResult> {
@@ -585,45 +614,70 @@ Extract the following. Use null for unknown values. NEVER guess or invent:
 
 Be conservative. If unsure, use null.`;
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${openaiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: 'You are a precise data extractor. Respond only with valid JSON. Never invent information.' },
-        { role: 'user', content: prompt }
-      ],
-      temperature: 0,
-      max_tokens: 300,
-    }),
-  });
+  const maxRetries = 3;
+  let lastError;
 
-  if (!response.ok) {
-    throw new Error(`OpenAI API error: ${response.statusText}`);
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    if (attempt > 0) {
+      const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+
+    try {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${openaiKey}`,
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: 'You are a precise data extractor. Respond only with valid JSON. Never invent information.' },
+            { role: 'user', content: prompt }
+          ],
+          temperature: 0,
+          max_tokens: 300,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const content = data.choices[0]?.message?.content || '{}';
+
+        try {
+          return JSON.parse(content);
+        } catch {
+          return {
+            vendor_name: null,
+            amount: null,
+            currency: null,
+            billing_cycle: null,
+            renewal_date: null,
+            is_trial: false,
+            is_cancellation: false,
+            confidence: 0,
+            reason: 'Parse error',
+          };
+        }
+      }
+
+      if (response.status === 429) {
+        lastError = new Error('OpenAI API rate limit exceeded');
+        continue;
+      }
+
+      throw new Error(`OpenAI API error: ${response.statusText}`);
+    } catch (error) {
+      lastError = error;
+      if (error.message.includes('rate limit') || error.message.includes('429')) {
+        continue;
+      }
+      throw error;
+    }
   }
 
-  const data = await response.json();
-  const content = data.choices[0]?.message?.content || '{}';
-
-  try {
-    return JSON.parse(content);
-  } catch {
-    return {
-      vendor_name: null,
-      amount: null,
-      currency: null,
-      billing_cycle: null,
-      renewal_date: null,
-      is_trial: false,
-      is_cancellation: false,
-      confidence: 0,
-      reason: 'Parse error',
-    };
-  }
+  throw lastError || new Error('Max retries exceeded');
 }
 
 function validateExtraction(extraction: ExtractionResult, email: EmailMessage): ExtractionResult | null {
