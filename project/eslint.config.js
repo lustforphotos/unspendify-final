@@ -24,5 +24,21 @@ export default tseslint.config(
         { allowConstantExport: true },
       ],
     },
+  },
+  {
+    files: ['src/pages/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['**/components/AppLayout', '../components/AppLayout', '*/AppLayout'],
+              message: 'Pages must not import AppLayout. AppLayout is injected by the router at App.tsx. See NAVIGATION_CONTRACT.md for details.',
+            },
+          ],
+        },
+      ],
+    },
   }
 );
