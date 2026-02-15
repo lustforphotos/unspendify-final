@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { Bell, AlertCircle, CheckCircle, Mail, Calendar, Package } from 'lucide-react';
-import AppLayout from '../components/AppLayout';
 import { supabase } from '../lib/supabase';
 
 interface Notification {
@@ -127,20 +126,20 @@ export default function Notifications() {
 
   if (loading) {
     return (
-      <AppLayout currentPath="/app/notifications">
+      <div>
         <div className="flex items-center justify-center py-12">
           <div className="text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-slate-900 mx-auto mb-4"></div>
             <p className="text-slate-600">Loading notifications...</p>
           </div>
         </div>
-      </AppLayout>
+      </div>
     );
   }
 
   if (error) {
     return (
-      <AppLayout currentPath="/app/notifications">
+      <div>
         <div className="flex items-center justify-center py-12">
           <div className="text-center">
             <AlertCircle className="mx-auto mb-4 text-red-600" size={48} />
@@ -148,12 +147,12 @@ export default function Notifications() {
             <p className="text-slate-600">{error}</p>
           </div>
         </div>
-      </AppLayout>
+      </div>
     );
   }
 
   return (
-    <AppLayout currentPath="/app/notifications">
+    <div>
       <div>
         <div className="mb-8">
           <div className="flex items-center justify-between">
@@ -260,6 +259,6 @@ export default function Notifications() {
           )}
         </div>
       </div>
-    </AppLayout>
+    </div>
   );
 }
