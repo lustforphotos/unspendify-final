@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { Package, DollarSign, Calendar, AlertCircle, Shield, Mail, ArrowRight, Eye } from 'lucide-react';
-import AppLayout from '../components/AppLayout';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -146,34 +145,29 @@ export default function Dashboard() {
 
   if (loading) {
     return (
-      <AppLayout currentPath="/app">
-        <div className="flex items-center justify-center py-12">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-slate-900 mx-auto mb-4"></div>
-            <p className="text-slate-600">Loading dashboard...</p>
-          </div>
+      <div className="flex items-center justify-center py-12">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-slate-900 mx-auto mb-4"></div>
+          <p className="text-slate-600">Loading dashboard...</p>
         </div>
-      </AppLayout>
+      </div>
     );
   }
 
   if (error) {
     return (
-      <AppLayout currentPath="/app">
-        <div className="flex items-center justify-center py-12">
-          <div className="text-center">
-            <AlertCircle className="mx-auto mb-4 text-red-600" size={48} />
-            <p className="text-slate-900 font-medium mb-2">Failed to load dashboard</p>
-            <p className="text-slate-600">{error}</p>
-          </div>
+      <div className="flex items-center justify-center py-12">
+        <div className="text-center">
+          <AlertCircle className="mx-auto mb-4 text-red-600" size={48} />
+          <p className="text-slate-900 font-medium mb-2">Failed to load dashboard</p>
+          <p className="text-slate-600">{error}</p>
         </div>
-      </AppLayout>
+      </div>
     );
   }
 
   return (
-    <AppLayout currentPath="/app">
-      <div>
+    <div>
         <div className="mb-10">
           <h1 className="text-3xl font-semibold text-slate-900 mb-2">Dashboard</h1>
           <p className="text-slate-600">Your company's subscription memory layer</p>
@@ -237,7 +231,10 @@ export default function Dashboard() {
         )}
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-          <div className="bg-white border border-slate-200 rounded-xl p-6">
+          <a
+            href="/app/tools?from=dashboard"
+            className="bg-white border border-slate-200 rounded-xl p-6 hover:border-slate-300 hover:shadow-sm transition-all"
+          >
             <div className="flex items-center gap-3 mb-3">
               <div className="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center">
                 <Package className="text-slate-600" size={18} />
@@ -245,9 +242,12 @@ export default function Dashboard() {
             </div>
             <div className="text-3xl font-semibold text-slate-900 mb-1">{stats.totalTools}</div>
             <div className="text-sm text-slate-600">Detected Tools</div>
-          </div>
+          </a>
 
-          <div className="bg-white border border-slate-200 rounded-xl p-6">
+          <a
+            href="/app/analytics?from=dashboard"
+            className="bg-white border border-slate-200 rounded-xl p-6 hover:border-slate-300 hover:shadow-sm transition-all"
+          >
             <div className="flex items-center gap-3 mb-3">
               <div className="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center">
                 <DollarSign className="text-slate-600" size={18} />
@@ -255,9 +255,12 @@ export default function Dashboard() {
             </div>
             <div className="text-3xl font-semibold text-slate-900 mb-1">${stats.monthlySpend.toLocaleString()}</div>
             <div className="text-sm text-slate-600">Monthly Spend</div>
-          </div>
+          </a>
 
-          <div className="bg-white border border-slate-200 rounded-xl p-6">
+          <a
+            href="/app/renewals?from=dashboard"
+            className="bg-white border border-slate-200 rounded-xl p-6 hover:border-slate-300 hover:shadow-sm transition-all"
+          >
             <div className="flex items-center gap-3 mb-3">
               <div className="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center">
                 <Calendar className="text-slate-600" size={18} />
@@ -265,9 +268,12 @@ export default function Dashboard() {
             </div>
             <div className="text-3xl font-semibold text-slate-900 mb-1">{stats.upcomingRenewals}</div>
             <div className="text-sm text-slate-600">Renewals (30d)</div>
-          </div>
+          </a>
 
-          <div className="bg-white border border-slate-200 rounded-xl p-6">
+          <a
+            href="/app/interruptions?from=dashboard"
+            className="bg-white border border-slate-200 rounded-xl p-6 hover:border-slate-300 hover:shadow-sm transition-all"
+          >
             <div className="flex items-center gap-3 mb-3">
               <div className="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center">
                 <AlertCircle className="text-slate-600" size={18} />
@@ -275,15 +281,18 @@ export default function Dashboard() {
             </div>
             <div className="text-3xl font-semibold text-slate-900 mb-1">{stats.activeInterruptions}</div>
             <div className="text-sm text-slate-600">Need Attention</div>
-          </div>
+          </a>
         </div>
 
         {tools.length > 0 && (
           <div className="bg-white border border-slate-200 rounded-xl p-6 mb-8">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-semibold text-slate-900">Recently Detected</h2>
-              <a href="/app/tools" className="text-sm text-blue-600 hover:text-blue-700 font-medium">
-                View all tools
+              <a
+                href="/app/tools?from=dashboard&sort=first_seen_date&order=desc"
+                className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+              >
+                View all tools →
               </a>
             </div>
             <div className="space-y-3">
@@ -338,7 +347,6 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
-      </div>
-    </AppLayout>
+    </div>
   );
 }
